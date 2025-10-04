@@ -11,4 +11,5 @@ func Register(r *gin.Engine) {
 	})
 	r.GET("/weather", handlers.GetWeather)
 	r.POST("/ask", handlers.AskHandler)
+	r.POST("/improve", handlers.ImproveHandler)
 }
