@@ -29,7 +29,6 @@ type WeatherResponse struct {
 	RoadTraffic    int           `json:"road_traffic"`
 	CrimeRisks     int           `json:"crime_risks"`
 	LifeComfortIdx float64       `json:"life_comfort_index"`
-	Pressure       float64       `json:"pressure,omitempty"`
 	Date           string        `json:"date,omitempty"`
 	TempMax        float64       `json:"temp_max,omitempty"`
 	TempMin        float64       `json:"temp_min,omitempty"`
@@ -96,7 +95,7 @@ func GetWeather(c *gin.Context) {
 			return
 		}
 
-		var tempMax, tempMin, hum, wind, pressure float64
+		var tempMax, tempMin, hum, wind float64
 		var cond string
 		var hours []interface{}
 		if days, ok := body["days"].([]interface{}); ok && len(days) > 0 {
@@ -118,13 +117,6 @@ func GetWeather(c *gin.Context) {
 				if v, ok := dm["windspeed"].(float64); ok {
 					wind = v
 				}
-				if v, ok := dm["pressure"].(float64); ok {
-					pressure = v
-				} else if pn, ok := dm["pressure"].(json.Number); ok {
-					if fv, err := pn.Float64(); err == nil {
-						pressure = fv
-					}
-				}
 				if cnd, ok := dm["conditions"].(string); ok {
 					cond = cnd
 				}
@@ -137,7 +129,7 @@ func GetWeather(c *gin.Context) {
 			return
 		}
 
-		airScore := getAirScore(city)
+		airScore := getAirScore(city)         
 		trafficScore := getTrafficScore(city)
 		crimeScore := getCrimeScore(city)
 
@@ -185,7 +177,6 @@ func GetWeather(c *gin.Context) {
 			TempMin:        tempMin,
 			Humidity:       hum,
 			WindSpeed:      wind,
-			Pressure:       pressure,
 			Hours:          hours,
 		}
 
@@ -249,7 +240,6 @@ func GetWeather(c *gin.Context) {
 	var tempMin float64
 	var hum float64
 	var wind float64
-	var pressure float64
 	var hours []interface{}
 
 	if curr, ok := body["currentConditions"].(map[string]interface{}); ok {
@@ -268,13 +258,6 @@ func GetWeather(c *gin.Context) {
 		}
 		if v, ok := curr["windspeed"].(float64); ok {
 			wind = v
-		}
-		if v, ok := curr["pressure"].(float64); ok {
-			pressure = v
-		} else if pn, ok := curr["pressure"].(json.Number); ok {
-			if fv, err := pn.Float64(); err == nil {
-				pressure = fv
-			}
 		}
 		if h, ok := curr["hours"].([]interface{}); ok {
 			hours = h
@@ -360,7 +343,6 @@ func GetWeather(c *gin.Context) {
 		TempMin:        tempMin,
 		Humidity:       hum,
 		WindSpeed:      wind,
-		Pressure:       pressure,
 		Hours:          hours,
 	}
 
@@ -370,13 +352,14 @@ func GetWeather(c *gin.Context) {
 		return
 	}
 
-	instruction := "You are an assistant that generates a short weather forecast and a brief day comfort summary in English. " +
-		"You MUST use and PRESERVE the numeric values provided in the prompt exactly, and insert them into a readable sentence. " +
-		"Response format: one short line (not JSON) containing the temperature (°C), main conditions, humidity (%) and wind speed (m/s), " +
-		"plus a short tip (what to take/how to dress). The numeric values in the sentence must exactly match those in the prompt."
+instruction := "You are an assistant that generates a short weather forecast and a brief day comfort summary in English. " +
+	"You MUST use and PRESERVE the numeric values provided in the prompt exactly, and insert them into a readable sentence. " +
+	"Response format: one short line (not JSON) containing the temperature (°C), main conditions, humidity (%) and wind speed (m/s), " +
+	"plus a short tip (what to take/how to dress). The numeric values in the sentence must exactly match those in the prompt."
 
-	prompt := fmt.Sprintf("City: %s\nDate: %s (Year: %d)\nTemperature_max: %.1f\nHumidity: %.1f\nWindSpeed: %.1f\nAirPurity: %d\nRoadTraffic: %d\nCrimeRisks: %d\nLifeComfortIndex: %.1f\nConditions: %s",
-		cityName, time.Now().Format("2006-01-02"), time.Now().Year(), tempToReturn, hum, wind, airScore, trafficScore, crimeScore, total, cond)
+prompt := fmt.Sprintf("City: %s\nDate: %s (Year: %d)\nTemperature_max: %.1f\nHumidity: %.1f\nWindSpeed: %.1f\nAirPurity: %d\nRoadTraffic: %d\nCrimeRisks: %d\nLifeComfortIndex: %.1f\nConditions: %s",
+	cityName, time.Now().Format("2006-01-02"), time.Now().Year(), tempToReturn, hum, wind, airScore, trafficScore, crimeScore, total, cond)
+
 
 	aiText, err := askGemini(apiKey, instruction, prompt)
 	if err != nil {
