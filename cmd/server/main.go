@@ -9,8 +9,6 @@ import (
 func main() {
 	r := gin.Default()
 	cfg := config.Load()
-	routes.Register(r)
-
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -21,6 +19,8 @@ func main() {
 		}
 		c.Next()
 	})
+
+	routes.Register(r)
 
 	r.Run(":" + cfg.Port)
 }
