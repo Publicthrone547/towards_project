@@ -10,4 +10,5 @@ func Register(r *gin.Engine) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 	r.GET("/weather", handlers.GetWeather)
+	r.POST("/ask", handlers.AskHandler)
 }
