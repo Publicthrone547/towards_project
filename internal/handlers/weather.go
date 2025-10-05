@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"math"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -43,7 +42,7 @@ type WeatherResponse struct {
 	PopulationDensity float64       `json:"population_density,omitempty"`
 	CityPopulation    int64         `json:"city_population,omitempty"`
 	CityDensity       float64       `json:"city_density_per_km2,omitempty"`
-	EconomyIndex      float64       `json:"economy_index,omitempty"`
+	Pressure          float64       `json:"pressure,omitempty"`
 }
 
 func GetWeather(c *gin.Context) {
@@ -103,7 +102,7 @@ func GetWeather(c *gin.Context) {
 			return
 		}
 
-		var tempMax, tempMin, hum, wind float64
+	var tempMax, tempMin, hum, wind, pressure float64
 		var cond string
 		var hours []interface{}
 		if days, ok := body["days"].([]interface{}); ok && len(days) > 0 {
@@ -125,6 +124,13 @@ func GetWeather(c *gin.Context) {
 				if v, ok := dm["windspeed"].(float64); ok {
 					wind = v
 				}
+				if v, ok := dm["pressure"].(float64); ok {
+					pressure = v
+				} else if pn, ok := dm["pressure"].(json.Number); ok {
+					if fv, err := pn.Float64(); err == nil {
+						pressure = fv
+					}
+				}
 				if cnd, ok := dm["conditions"].(string); ok {
 					cond = cnd
 				}
@@ -137,12 +143,40 @@ func GetWeather(c *gin.Context) {
 			return
 		}
 
-		airScore := getAirScore(city)
+		airScore := getAirScore(city)         
 		trafficScore := getTrafficScore(city)
 		crimeScore := getCrimeScore(city)
 
-		var gdp float64
-		var population int64
+		tempForIndex := tempMax
+		tempDiff := tempForIndex - 21.0
+		if tempDiff < 0 {
+			tempDiff = -tempDiff
+		}
+		tempPenalty := tempDiff * 5.0
+		tempScore := 100.0 - tempPenalty
+		if tempScore < 0 {
+			tempScore = 0
+		}
+		if tempScore > 100 {
+			tempScore = 100
+		}
+
+		trafficComfort := 100 - trafficScore
+		if trafficComfort < 0 {
+			trafficComfort = 0
+		}
+		crimeComfort := 100 - crimeScore
+		if crimeComfort < 0 {
+			crimeComfort = 0
+		}
+
+		total := (tempScore + float64(airScore) + float64(trafficComfort) + float64(crimeComfort)) / 4.0
+		if total < 0 {
+			total = 0
+		}
+		if total > 100 {
+			total = 100
+		}
 
 		out := WeatherResponse{
 			City:           city,
@@ -151,33 +185,23 @@ func GetWeather(c *gin.Context) {
 			AirPurity:      airScore,
 			RoadTraffic:    trafficScore,
 			CrimeRisks:     crimeScore,
+			LifeComfortIdx: total,
 			Date:           respDate.Format("02-01-2006"),
 			TempMax:        tempMax,
 			TempMin:        tempMin,
 			Humidity:       hum,
 			WindSpeed:      wind,
+			Pressure:       pressure,
 			Hours:          hours,
 		}
 
+		// Try to fetch country stats
 		country := getCountryFromBody(body)
 		if country != "" {
-			if ggdp, pop, dens, err := fetchCountryStats(country); err == nil {
-				out.GDPUSD = ggdp
+			if gdp, pop, dens, err := fetchCountryStats(country); err == nil {
+				out.GDPUSD = gdp
 				out.PopulationTotal = pop
 				out.PopulationDensity = dens
-				gdp = ggdp
-				population = pop
-				if pop > 0 {
-					gdpPerCap := ggdp / float64(pop)
-					idx := math.Log10(gdpPerCap+1.0) * 20.0
-					if idx < 0 {
-						idx = 0
-					}
-					if idx > 100 {
-						idx = 100
-					}
-					out.EconomyIndex = idx
-				}
 			}
 			if cp, carea, err := fetchCityStats(city, country); err == nil {
 				out.CityPopulation = cp
@@ -186,8 +210,6 @@ func GetWeather(c *gin.Context) {
 				}
 			}
 		}
-
-		out.LifeComfortIdx = computeLifeComfortIndex(tempMax, hum, wind, airScore, trafficScore, crimeScore, gdp, population)
 
 		now := time.Now().UTC()
 		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
@@ -209,7 +231,7 @@ func GetWeather(c *gin.Context) {
 			"plus a short tip (what to take/how to dress). The numeric values in the sentence must exactly match those in the prompt."
 
 		prompt := fmt.Sprintf("City: %s\nDate: %s (Year: %d)\nTemperature_max: %.1f\nHumidity: %.1f\nWindSpeed: %.1f\nAirPurity: %d\nRoadTraffic: %d\nCrimeRisks: %d\nLifeComfortIndex: %.1f\nConditions: %s",
-			city, respDate.Format("2006-01-02"), respDate.Year(), tempMax, hum, wind, airScore, trafficScore, crimeScore, out.LifeComfortIdx, cond)
+			city, respDate.Format("2006-01-02"), respDate.Year(), tempMax, hum, wind, airScore, trafficScore, crimeScore, total, cond)
 
 		aiText, err := askGemini(apiKey, instruction, prompt)
 		if err != nil {
@@ -249,9 +271,10 @@ func GetWeather(c *gin.Context) {
 	var tempMin float64
 	var hum float64
 	var wind float64
+	var pressure float64
 	var hours []interface{}
 
-	if curr, ok := body["currentConditions"].(map[string]interface{}); ok {
+		if curr, ok := body["currentConditions"].(map[string]interface{}); ok {
 		if t, ok := curr["temp"].(float64); ok {
 			temp = t
 		} else if tf, ok := curr["temp"].(json.Number); ok {
@@ -268,6 +291,13 @@ func GetWeather(c *gin.Context) {
 		if v, ok := curr["windspeed"].(float64); ok {
 			wind = v
 		}
+			if v, ok := curr["pressure"].(float64); ok {
+				pressure = v
+			} else if pn, ok := curr["pressure"].(json.Number); ok {
+				if fv, err := pn.Float64(); err == nil {
+					pressure = fv
+				}
+			}
 		if h, ok := curr["hours"].([]interface{}); ok {
 			hours = h
 		}
@@ -308,10 +338,36 @@ func GetWeather(c *gin.Context) {
 	trafficScore := getTrafficScore(city)
 	crimeScore := getCrimeScore(city)
 
-	var gdp float64
-	var population int64
-
 	tempForIndex := tempToReturn
+	tempDiff := tempForIndex - 21.0
+	if tempDiff < 0 {
+		tempDiff = -tempDiff
+	}
+	tempPenalty := tempDiff * 5.0
+	tempScore := 100.0 - tempPenalty
+	if tempScore < 0 {
+		tempScore = 0
+	}
+	if tempScore > 100 {
+		tempScore = 100
+	}
+
+	trafficComfort := 100 - trafficScore
+	if trafficComfort < 0 {
+		trafficComfort = 0
+	}
+	crimeComfort := 100 - crimeScore
+	if crimeComfort < 0 {
+		crimeComfort = 0
+	}
+
+	total := (tempScore + float64(airScore) + float64(trafficComfort) + float64(crimeComfort)) / 4.0
+	if total < 0 {
+		total = 0
+	}
+	if total > 100 {
+		total = 100
+	}
 
 	out := WeatherResponse{
 		City:           cityName,
@@ -320,33 +376,22 @@ func GetWeather(c *gin.Context) {
 		AirPurity:      airScore,
 		RoadTraffic:    trafficScore,
 		CrimeRisks:     crimeScore,
+		LifeComfortIdx: total,
 		Date:           time.Now().Format("02-01-2006"),
 		TempMax:        tempMax,
 		TempMin:        tempMin,
 		Humidity:       hum,
 		WindSpeed:      wind,
+		Pressure:       pressure,
 		Hours:          hours,
 	}
 
 	country := getCountryFromBody(body)
 	if country != "" {
-		if ggdp, pop, dens, err := fetchCountryStats(country); err == nil {
-			out.GDPUSD = ggdp
+		if gdp, pop, dens, err := fetchCountryStats(country); err == nil {
+			out.GDPUSD = gdp
 			out.PopulationTotal = pop
 			out.PopulationDensity = dens
-			gdp = ggdp
-			population = pop
-			if pop > 0 {
-				gdpPerCap := ggdp / float64(pop)
-				idx := math.Log10(gdpPerCap+1.0) * 20.0
-				if idx < 0 {
-					idx = 0
-				}
-				if idx > 100 {
-					idx = 100
-				}
-				out.EconomyIndex = idx
-			}
 		}
 		if cp, carea, err := fetchCityStats(cityName, country); err == nil {
 			out.CityPopulation = cp
@@ -356,21 +401,19 @@ func GetWeather(c *gin.Context) {
 		}
 	}
 
-	out.LifeComfortIdx = computeLifeComfortIndex(tempForIndex, hum, wind, airScore, trafficScore, crimeScore, gdp, population)
-
 	apiKey := ensureGeminiKey()
 	if apiKey == "" {
 		c.JSON(http.StatusOK, out)
 		return
 	}
 
-	instruction := "You are an assistant that generates a short weather forecast and a brief day comfort summary in English. " +
-		"You MUST use and PRESERVE the numeric values provided in the prompt exactly, and insert them into a readable sentence. " +
-		"Response format: one short line (not JSON) containing the temperature (°C), main conditions, humidity (%) and wind speed (m/s), " +
-		"plus a short tip (what to take/how to dress). The numeric values in the sentence must exactly match those in the prompt."
+instruction := "You are an assistant that generates a short weather forecast and a brief day comfort summary in English. " +
+	"You MUST use and PRESERVE the numeric values provided in the prompt exactly, and insert them into a readable sentence. " +
+	"Response format: one short line (not JSON) containing the temperature (°C), main conditions, humidity (%) and wind speed (m/s), " +
+	"plus a short tip (what to take/how to dress). The numeric values in the sentence must exactly match those in the prompt."
 
-	prompt := fmt.Sprintf("City: %s\nDate: %s (Year: %d)\nTemperature_max: %.1f\nHumidity: %.1f\nWindSpeed: %.1f\nAirPurity: %d\nRoadTraffic: %d\nCrimeRisks: %d\nLifeComfortIndex: %.1f\nConditions: %s",
-		cityName, time.Now().Format("2006-01-02"), time.Now().Year(), tempToReturn, hum, wind, airScore, trafficScore, crimeScore, out.LifeComfortIdx, cond)
+prompt := fmt.Sprintf("City: %s\nDate: %s (Year: %d)\nTemperature_max: %.1f\nHumidity: %.1f\nWindSpeed: %.1f\nAirPurity: %d\nRoadTraffic: %d\nCrimeRisks: %d\nLifeComfortIndex: %.1f\nConditions: %s",
+	cityName, time.Now().Format("2006-01-02"), time.Now().Year(), tempToReturn, hum, wind, airScore, trafficScore, crimeScore, total, cond)
 
 
 	aiText, err := askGemini(apiKey, instruction, prompt)
@@ -384,7 +427,9 @@ func GetWeather(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// fetchCountryFromResolvedAddress attempts to extract a country name from VisualCrossing resolvedAddress
 func fetchCountryFromResolvedAddress(addr string) string {
+	// resolvedAddress often is "City, Region, Country" or similar
 	parts := strings.Split(addr, ",")
 	if len(parts) == 0 {
 		return ""
@@ -393,11 +438,14 @@ func fetchCountryFromResolvedAddress(addr string) string {
 	return last
 }
 
+// fetchCountryStats returns (gdp_usd, population, population_density) using public APIs.
+// It uses REST Countries to get population and area, and World Bank to get latest GDP (NY.GDP.MKTP.CD).
 func fetchCountryStats(country string) (float64, int64, float64, error) {
 	if country == "" {
 		return 0, 0, 0, fmt.Errorf("country empty")
 	}
 
+	// REST Countries API to get population and area and alpha2Code
 	rcURL := "https://restcountries.com/v3.1/name/" + url.PathEscape(country)
 	resp, err := http.Get(rcURL)
 	if err != nil {
@@ -425,7 +473,7 @@ func fetchCountryStats(country string) (float64, int64, float64, error) {
 
 	var gdp float64
 	if cca3, ok := rc[0]["cca3"].(string); ok && cca3 != "" {
-		wbURL := fmt.Sprintf("https://api.worldbank.org/v2/country/%s/indicator/NY.GDP.MKTP.CD?format=json&per_page=1000", strings.ToLower(cca3))
+		wbURL := fmt.Sprintf("https://api.worldbank.org/v2/country/%s/indicator/NY.GDP.MKTP.CD?format=json&per_page=1", strings.ToLower(cca3))
 		wbResp, err := http.Get(wbURL)
 		if err == nil {
 			defer wbResp.Body.Close()
@@ -433,14 +481,9 @@ func fetchCountryStats(country string) (float64, int64, float64, error) {
 				var wb []interface{}
 				if err := json.NewDecoder(wbResp.Body).Decode(&wb); err == nil && len(wb) > 1 {
 					if series, ok := wb[1].([]interface{}); ok && len(series) > 0 {
-						for _, si := range series {
-							if item, ok := si.(map[string]interface{}); ok {
-								if val, exists := item["value"]; exists && val != nil {
-									if vf, ok := val.(float64); ok {
-										gdp = vf
-										break
-									}
-								}
+						if first, ok := series[0].(map[string]interface{}); ok {
+							if val, ok := first["value"].(float64); ok {
+								gdp = val
 							}
 						}
 					}
@@ -457,6 +500,7 @@ func fetchCountryStats(country string) (float64, int64, float64, error) {
 	return gdp, population, density, nil
 }
 
+// fetchCityStats attempts to get city population and area via Nominatim (best-effort).
 func fetchCityStats(city, country string) (int64, float64, error) {
 	if city == "" {
 		return 0, 0, fmt.Errorf("city empty")
@@ -492,13 +536,17 @@ func fetchCityStats(city, country string) (int64, float64, error) {
 			}
 		}
 	}
+	// area not commonly provided; leave 0
 	return pop, area, nil
 }
 
+// getCountryFromBody extracts country from VisualCrossing response body.
+// It tries resolvedAddress first, then falls back to latitude/longitude reverse lookup.
 func getCountryFromBody(body map[string]interface{}) string {
 	if addr, ok := body["resolvedAddress"].(string); ok && addr != "" {
 		return fetchCountryFromResolvedAddress(addr)
 	}
+	// try lat/lon
 	lat, latOk := body["latitude"].(float64)
 	lon, lonOk := body["longitude"].(float64)
 	if latOk && lonOk {
@@ -605,65 +653,4 @@ func getTrafficScore(city string) int {
 func getCrimeScore(city string) int {
 	v := (len(city)*73 + 29) % 101
 	return v
-}
-
-func computeLifeComfortIndex(temp, humidity, wind float64, airScore, trafficScore, crimeScore int, gdp float64, population int64) float64 {
-	tempDiff := math.Abs(temp - 21.0)
-	tempScore := 100.0 - tempDiff*4.0
-	if tempScore < 0 {
-		tempScore = 0
-	}
-
-	humDiff := math.Abs(humidity - 50.0)
-	humScore := 100.0 - humDiff*2.0
-	if humScore < 0 {
-		humScore = 0
-	}
-
-	windScore := 100.0 - wind*5.0
-	if windScore < 0 {
-		windScore = 0
-	}
-
-	airComfort := float64(airScore)
-	trafficComfort := 100.0 - float64(trafficScore)
-	if trafficComfort < 0 {
-		trafficComfort = 0
-	}
-	crimeComfort := 100.0 - float64(crimeScore)
-	if crimeComfort < 0 {
-		crimeComfort = 0
-	}
-
-	econScore := 50.0
-	if gdp > 0 && population > 0 {
-		gdpPerCap := gdp / float64(population)
-		econScore = math.Log10(gdpPerCap+1.0) * 20.0
-		if econScore < 0 {
-			econScore = 0
-		}
-		if econScore > 100 {
-			econScore = 100
-		}
-	}
-
-	weights := map[string]float64{
-		"temp":    0.22,
-		"hum":     0.12,
-		"wind":    0.06,
-		"air":     0.25,
-		"traffic": 0.15,
-		"crime":   0.15,
-		"econ":    0.05,
-	}
-
-	score := tempScore*weights["temp"] + humScore*weights["hum"] + windScore*weights["wind"] + airComfort*weights["air"] + trafficComfort*weights["traffic"] + crimeComfort*weights["crime"] + econScore*weights["econ"]
-
-	if score < 0 {
-		score = 0
-	}
-	if score > 100 {
-		score = 100
-	}
-	return math.Round(score*10.0) / 10.0
 }
