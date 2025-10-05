@@ -29,7 +29,6 @@ func ImproveHandler(c *gin.Context) {
 	cfg := config.Load()
 	key := cfg.GeminiAPIKey
 
-	// request a short answer with header and word limit
 	prompt := fmt.Sprintf("решение: Короткий ответ\nНе больше 50 слов. Provide practical, non-political, community-driven suggestions to improve the city '%s' (date=%s). Use the following metrics and propose infrastructure, environment, safety and public service improvements.\nMetrics:\n%v\n\nRespond concisely.", req.City, req.Date, req.WeatherJSON)
 
 	reply, err := ai.AskGemini(key, "", prompt)
@@ -38,7 +37,6 @@ func ImproveHandler(c *gin.Context) {
 		return
 	}
 
-	// enforce 50-word limit server-side as safety (truncate if model exceeded)
 	words := splitWords(reply)
 	if len(words) > 50 {
 		words = words[:50]
@@ -48,7 +46,6 @@ func ImproveHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, ImproveResponse{Suggestions: reply})
 }
 
-// splitWords splits on whitespace
 func splitWords(s string) []string {
 	var out []string
 	curr := ""
