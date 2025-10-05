@@ -64,9 +64,9 @@ func fetchEarthquakeRisk(lat, lon float64, radiusKm int, periodYears int) (float
 		}
 	}
 
-
 	var totalWeightedEnergy float64
 	now := time.Now()
+	recentCount := 0
 	for i := range features {
 		if f, ok := features[i].(map[string]interface{}); ok {
 			props, _ := f["properties"].(map[string]interface{})
@@ -83,14 +83,43 @@ func fetchEarthquakeRisk(lat, lon float64, radiusKm int, periodYears int) (float
 			}
 			t := time.Unix(0, timeVal*int64(time.Millisecond))
 			days := now.Sub(t).Hours() / 24.0
-			decay := math.Exp(-days / 365.0)
+			decay := math.Exp(-days / 730.0)
 			energy := math.Pow(10.0, 1.5*mag)
 			totalWeightedEnergy += energy * decay
+			if days <= 365.0*5.0 {
+				if mag >= 3.0 {
+					recentCount++
+				}
+			}
 		}
 	}
 
-	refEnergy := math.Pow(10.0, 1.5*7.0)
-	score := math.Log10(totalWeightedEnergy/refEnergy+1.0) * 50.0
+	refEnergy := math.Pow(10.0, 1.5*5.0)
+	energyScore := math.Log10(totalWeightedEnergy/refEnergy+1.0) * 120.0
+	if energyScore < 0 {
+		energyScore = 0
+	}
+	if energyScore > 100 {
+		energyScore = 100
+	}
+
+	magScore := 0.0
+	if maxMag > 0 {
+		magScore = (maxMag - 3.0) / (8.0 - 3.0) * 100.0
+		if magScore < 0 {
+			magScore = 0
+		}
+		if magScore > 100 {
+			magScore = 100
+		}
+	}
+
+	recentScore := math.Log10(float64(recentCount)+1.0) * 35.0
+	if recentScore > 100 {
+		recentScore = 100
+	}
+
+	score := energyScore*0.5 + magScore*0.35 + recentScore*0.15
 	if score < 0 {
 		score = 0
 	}
